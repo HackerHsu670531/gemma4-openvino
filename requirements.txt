@@ -94,13 +94,20 @@ onnxruntime==1.26.0
 onnxruntime-openvino==1.24.1
 onnxscript==0.7.0
 opencv-python==4.13.0.92
-openvino==2026.3.0.dev20260525
-openvino-genai==2026.3.0.0.dev20260525
-openvino-telemetry==2025.2.0
-openvino-tokenizers==2026.3.0.0.dev20260525
-optimum==2.1.0.dev0
-optimum-intel==1.27.0.dev0+140e49a
-optimum-onnx==0.1.0.dev0
+#openvino==2026.3.0.dev20260525
+#openvino-genai==2026.3.0.0.dev20260525
+#openvino-telemetry==2025.2.0
+#openvino-tokenizers==2026.3.0.0.dev20260525
+#optimum==2.1.0.dev0
+#optimum-intel==1.27.0.dev0+140e49a
+#optimum-onnx==0.1.0.dev0
+# OpenVINO Nightly 版本 (包含 tokenizers)
+--extra-index-url https://storage.openvinotoolkit.org/simple/wheels/nightly
+openvino
+openvino-tokenizers
+openvino-genai
+# Optimum Intel (從 GitHub 安裝)
+optimum-intel @ git+https://github.com/huggingface/optimum-intel.git
 orjson==3.11.9
 packaging==26.2
 pandas==3.0.3

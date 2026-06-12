@@ -75,13 +75,22 @@ class MinimalAudioEncoderWrapper(torch.nn.Module):
         return self.embed_proj(hidden_states)
 
 class MinimalVisionEncoderWrapper(torch.nn.Module):
-    def __init__(self, tower, embed):
+    def __init__(self, tower, embed, fixed_pos):
         super().__init__()
         self.tower = tower
         self.embed_norm = embed.embedding_pre_projection_norm
         self.embed_proj = embed.embedding_projection
+        # 將位置 ID 綁定為內部常數
+        self.register_buffer("fixed_pos", fixed_pos)
+
     def forward(self, pixel_values, pixel_position_ids):
-        tower_out = self.tower(pixel_values=pixel_values, pixel_position_ids=pixel_position_ids)
+        # 製造相依性：這能確保 OpenVINO 將 pixel_position_ids 保留為合法的動態輸入節點
+        # 但 .sum() * 0 讓它實際上不會干擾任何數值
+        dummy_zero = (pixel_position_ids.sum() * 0).to(pixel_values.dtype)
+        safe_pixel_values = pixel_values + dummy_zero
+        
+        # 內部運算強制使用常數 fixed_pos，讓優化器能順利消滅 NonZero 節點
+        tower_out = self.tower(pixel_values=safe_pixel_values, pixel_position_ids=self.fixed_pos)
         hidden_states = tower_out.last_hidden_state if hasattr(tower_out, 'last_hidden_state') else (tower_out[0] if isinstance(tower_out, tuple) else tower_out)
         hidden_states = self.embed_norm(hidden_states)
         return self.embed_proj(hidden_states)
@@ -161,7 +170,12 @@ def apply_quantization(ov_model, precision, model_name):
 
     print(f"      🗜️ Starting NNCF {precision.upper()} quantization compression for ({model_name})...")
     if precision == "int8":
-        compressed_model = nncf.compress_weights(ov_model, mode=nncf.CompressWeightsMode.INT8_ASYM)
+        # 👉 [NPU 修正] Vision Encoder 使用非對稱量化會產生 NPU 不支援的 0D Zero-point 純量
+        # 因此我們強制 Vision Encoder 使用對稱量化 (INT8_SYM)
+        if model_name == "Vision Encoder":
+            compressed_model = nncf.compress_weights(ov_model, mode=nncf.CompressWeightsMode.INT8_SYM)
+        else:
+            compressed_model = nncf.compress_weights(ov_model, mode=nncf.CompressWeightsMode.INT8_ASYM)
     elif precision == "int4":
         # Keep 80/20 mixed-precision for Decoder to prevent quality degradation, other Encoders are fully compressed (ratio=1.0)
         ratio = 0.6 if model_name == "Decoder" else 1.0
@@ -254,20 +268,46 @@ def main():
     if not (OV_DIR / "vision_encoder.xml").exists() or args.force_recreate:
         print("Converting Vision Encoder...")
         try:
-            pix_vals = image_inputs.get("pixel_values")
-            pix_pos = image_inputs.get("image_position_ids") if image_inputs.get("image_position_ids") is not None else image_inputs.get("pixel_position_ids")
+            pix_vals = image_inputs.get("pixel_values").to(torch.float32)
+            pix_pos = image_inputs.get("image_position_ids")
+            if pix_pos is None:
+                pix_pos = image_inputs.get("pixel_position_ids")
+            
             if pix_pos is None:
                 num_patches = pix_vals.shape[1]
                 grid_h = grid_w = int(np.sqrt(num_patches))
                 rows = torch.arange(grid_h, device=pix_vals.device).unsqueeze(1).expand(grid_h, grid_w).flatten() % 128
                 cols = torch.arange(grid_w, device=pix_vals.device).unsqueeze(0).expand(grid_h, grid_w).flatten() % 128
                 pix_pos = torch.stack([rows, cols], dim=-1).unsqueeze(0).to(torch.int64)
+            else:
+                pix_pos = pix_pos.to(torch.int64)
 
             apply_tracing_patches()
-            ov_vision = ov.convert_model(MinimalVisionEncoderWrapper(core_model.vision_tower, core_model.embed_vision).eval(), example_input=(pix_vals, pix_pos))
+            print(f"      [Hybrid Dynamic Export] Injecting Constant Positional IDs to destroy NonZero nodes...")
+            
+            # 將 pix_pos 傳入 Wrapper 當作常數
+            vision_wrapper = MinimalVisionEncoderWrapper(core_model.vision_tower, core_model.embed_vision, pix_pos).eval()
+            
+            with torch.no_grad():
+                traced_vision = torch.jit.trace(vision_wrapper, (pix_vals, pix_pos), check_trace=False)
+            
+            # 👉 【關鍵點】這裡不加 input=[...]，讓 OpenVINO 導出原生的動態形狀 [?, ?, ?]
+            ov_vision = ov.convert_model(
+                traced_vision,
+                example_input=(pix_vals, pix_pos)
+            )
             restore_tracing_patches()
 
+            print("      [Optimization] Executing Deep Constant Folding for internal masks...")
+            # 呼叫優化器，把常數 NonZero 徹底消滅，但保留外部參數的動態彈性
+            import openvino.passes as passes
+            pass_manager = passes.Manager()
+            pass_manager.register_pass(passes.ConstantFolding())
+            pass_manager.run_passes(ov_vision)
+
+            #print("      [Fallback] Enforcing FP16 precision specifically for Vision Encoder...")
             ov_vision = apply_quantization(ov_vision, args.precision, "Vision Encoder")
+            
             ov.save_model(ov_vision, OV_DIR / "vision_encoder.xml", compress_to_fp16=True)
             print("Vision Encoder converted and saved successfully!")
         except Exception as e:
@@ -300,7 +340,7 @@ def main():
             restore_tracing_patches()
             print(f"Decoder conversion failed: {e}")
 
-    print(f"\nOpenVINO conversion process finished successfully! Run `python infer_openvino_audio_vision_asr_ast_nncf_final.py --precision {args.precision}` for diagnostic testing & benchmarks.")
+    print(f"\nOpenVINO conversion process finished successfully! Run `python infer_openvino_audio_vision_asr_ast_nncf_final.py --precision {args.precision}` --device CPU, GPU, NPU diagnostic testing & benchmarks.")
 
 if __name__ == "__main__":
     main()

@@ -35,6 +35,9 @@ N:\Hacker\Gemm4_E2B\
 Set up your virtual environment and install the required dependencies:
 
 ```bash
+python -m venv openvino_gemma4_env
+openvino_gemma4_env\Scripts\activate
+python -m pip install --upgrade pip wheel setuptools
 pip install -r requirements.txt
 ```
 
@@ -57,23 +60,38 @@ python pytorch_to_ov_unified_nncf_final.py --precision int4 --force-recreate
 
 ### 3. Inference Run & Diagnostics (`Step 2`)
 
-Launch the pure OpenVINO inference pipeline on any test configuration:
+Launch the pure OpenVINO inference pipeline on any test configuration. You can specify the target device (NPU, CPU, or GPU):
 
 ```bash
-python infer_openvino_audio_vision_asr_ast_nncf_final.py --precision int8
+python infer_openvino_audio_vision_asr_ast_nncf_final.py --precision int4 --device NPU
 ```
 
 ---
 
 ## 📈 Benchmark Performance Diagnostics
 
-Below is a benchmark snapshot captured from a real system diagnostic running Gemma-4 on an Intel core platform (compiled with OpenVINO version `2026.3.0.dev20260525` running under INT8 precision):
+Below is a benchmark snapshot captured from a real system diagnostic running Gemma-4 on an Intel core platform (compiled with OpenVINO version `2026.3.0.dev20260525` running under INT4 precision):
 
+**[Device: NPU]**
 | Modality / Performance Metric | Preprocessing feature extraction | Time to First Token (TTFT) | Total Generation Time | Generated Tokens | Average Speeds |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| **🎵 Audio Recognition (ASR)** | `6.21s` | `74.81s` | `120.30s` | 30 tokens | `0.25 tokens/s` |
-| **🌍 Audio Translation (AST)** | `0.27s` | `1.25s` | `40.92s` | 30 tokens | `0.73 tokens/s` |
-| **🖼️ Image Inference (Vision)** | `4.31s` | `1.23s` | `85.64s` | 60 tokens | `0.70 tokens/s` |
+| **🎵 Audio Recognition (ASR)** | `146.22s` | `25.78s` | `48.64s` | 31 tokens | `0.64 tokens/s` |
+| **🌍 Audio Translation (AST)** | `30.68s` | `16.26s` | `88.71s` | 60 tokens | `0.68 tokens/s` |
+| **🖼️ Image Inference (Vision)** | `259.71s` | `16.16s` | `66.30s` | 60 tokens | `0.90 tokens/s` |
+
+**[Device: CPU]**
+| Modality / Performance Metric | Preprocessing feature extraction | Time to First Token (TTFT) | Total Generation Time | Generated Tokens | Average Speeds |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **🎵 Audio Recognition (ASR)** | `6.37s` | `52.92s` | `96.74s` | 31 tokens | `0.32 tokens/s` |
+| **🌍 Audio Translation (AST)** | `6.39s` | `2.81s` | `101.23s` | 60 tokens | `0.59 tokens/s` |
+| **🖼️ Image Inference (Vision)** | `5.60s` | `2.83s` | `95.95s` | 60 tokens | `0.63 tokens/s` |
+
+**[Device: GPU]**
+| Modality / Performance Metric | Preprocessing feature extraction | Time to First Token (TTFT) | Total Generation Time | Generated Tokens | Average Speeds |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **🎵 Audio Recognition (ASR)** | `15.99s` | `5.02s` | `17.19s` | 31 tokens | `1.80 tokens/s` |
+| **🌍 Audio Translation (AST)** | `6.13s` | `0.71s` | `26.46s` | 60 tokens | `2.27 tokens/s` |
+| **🖼️ Image Inference (Vision)** | `14.41s` | `5.00s` | `29.45s` | 60 tokens | `2.04 tokens/s` |
 
 ---
 
@@ -81,3 +99,4 @@ Below is a benchmark snapshot captured from a real system diagnostic running Gem
 
 * **Author:** Hacker Hsu ([HackerHsu670531](https://github.com/HackerHsu670531)) - Deep Learning Software Engineer
 * **Enterprise / Hardware Org:** IOTG/VMC/VPU NPU Execution Architectures
+```
